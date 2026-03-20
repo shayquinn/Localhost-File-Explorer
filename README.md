@@ -60,24 +60,6 @@ To recognize additional index files, modify the `$indexFiles` array:
 $indexFiles = ['index.php', 'index.html', 'index.htm', 'default.aspx'];
 ```
 
-## Screenshot
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  📂 Localhost File Explorer              Thu, Mar 20   │
-├─────────────────────────────────────────────────────────┤
-│  root / projects / my-app                               │
-│  C:\MAMP\htdocs\projects\my-app          [Copy path]   │
-├─────────────────────────────────────────────────────────┤
-│  📁 ..                    (parent directory)            │
-│  📁 css                                                 │
-│  📁 js                                                  │
-│  📁 vendor                 🔍                           │
-│  📄 index.php              1,234 bytes                  │
-│  📄 config.json            567 bytes                    │
-└─────────────────────────────────────────────────────────┘
-```
-
 ## License
 
 This project is open source and available for personal and commercial use.
