@@ -175,8 +175,9 @@ if (stripos($serverSoftware, 'Apache') !== false) {
             opacity: 1;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1600px;
             margin: 0 auto;
+            padding: 0 1rem;
         }
         main {
             background: var(--bg-card);
@@ -342,14 +343,14 @@ if (stripos($serverSoftware, 'Apache') !== false) {
         /* Grid view styles */
         .file-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 1.25rem;
             margin: 1rem 0;
         }
         .file-grid .file-card {
             background: rgba(255,255,255,0.05);
             border-radius: 0.75rem;
-            padding: 1rem;
+            padding: 1.25rem 1rem;
             text-align: center;
             transition: transform 0.2s;
         }
