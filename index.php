@@ -19,6 +19,63 @@ function hasIndex($dirPath, $indexFiles) {
     return false;
 }
 
+// Recursively search the whole project tree for files/folders whose name
+// contains $query (case-insensitive). Directories in $excludeDirs are
+// skipped entirely (not descended into) to keep things fast and clean.
+function searchTree($root, $query, $excludeDirs, $maxNodes = 150000, $maxSeconds = 45) {
+    $results = [];
+    $visited = 0;
+    $truncated = false;
+
+    $filter = function ($current) use ($excludeDirs) {
+        // Never follow symlinks/junctions - on Windows a junction pointing
+        // back at an ancestor directory would otherwise recurse forever.
+        if ($current->isLink()) {
+            return false;
+        }
+        if ($current->isDir() && in_array($current->getFilename(), $excludeDirs, true)) {
+            return false;
+        }
+        return true;
+    };
+
+    $dirIterator = new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS);
+    $filterIterator = new RecursiveCallbackFilterIterator($dirIterator, $filter);
+    $iterator = new RecursiveIteratorIterator($filterIterator, RecursiveIteratorIterator::SELF_FIRST);
+
+    $deadline = microtime(true) + $maxSeconds;
+
+    try {
+        foreach ($iterator as $fileInfo) {
+            $visited++;
+            if ($visited > $maxNodes || microtime(true) > $deadline) {
+                // Bail out rather than let a huge or slow (e.g. network-mounted)
+                // tree run until the web server's own gateway timeout kills it.
+                $truncated = true;
+                break;
+            }
+            if (stripos($fileInfo->getFilename(), $query) === false) {
+                continue;
+            }
+            $full = $fileInfo->getPathname();
+            $stat = @stat($full);
+            $results[] = [
+                'name' => $fileInfo->getFilename(),
+                'isDir' => $fileInfo->isDir(),
+                'size' => $stat ? $stat['size'] : 0,
+                'modified' => $stat ? $stat['mtime'] : 0,
+                'fullPath' => $full,
+                'relPath' => str_replace('\\', '/', substr($full, strlen($root) + 1)),
+            ];
+        }
+    } catch (UnexpectedValueException $e) {
+        // A subdirectory became unreadable (permissions, race condition) -
+        // return whatever was found rather than failing the whole search.
+    }
+
+    return ['matches' => $results, 'truncated' => $truncated];
+}
+
 // Get current directory from query string (sanitize)
 $dir = isset($_GET['dir']) ? $_GET['dir'] : '.';
 $base = realpath($dir);
@@ -29,6 +86,12 @@ $view = isset($_GET['view']) ? $_GET['view'] : 'list';   // 'list' or 'grid'
 $sort = isset($_GET['sort']) ? $_GET['sort'] : 'name';    // 'name', 'size', 'modified'
 $order = isset($_GET['order']) ? $_GET['order'] : 'asc';  // 'asc' or 'desc'
 
+// Search term - when present, search the whole project tree instead of
+// listing just the current directory. Works from a fresh page load too,
+// e.g. index.php?q=invoice
+$q = isset($_GET['q']) ? trim($_GET['q']) : '';
+$isSearch = $q !== '';
+
 // Handle realpath failures gracefully
 if ($base === false || $realBase === false) {
     die('Error: Unable to resolve directory path. Please check the directory exists.');
@@ -38,27 +101,49 @@ if (strpos($base, $realBase) !== 0) {
     die('Access denied.');
 }
 
-$items = scandir($base);
-if ($items === false) {
-    die('Error: Unable to read directory contents.');
-}
+$searchLimit = 500;
+$searchTotalMatches = 0;
+$searchScanTruncated = false;
 
-$items = array_filter($items, function($item) use ($base) {
-    return $item !== '.' && $item !== '..';
-});
-
-// Build an array of file data
-$fileData = [];
-foreach ($items as $item) {
-    $full = $base . '/' . $item;
-    $stat = stat($full);
-    $fileData[] = [
-        'name' => $item,
-        'isDir' => is_dir($full),
-        'size' => $stat['size'],
-        'modified' => $stat['mtime'],
-        'fullPath' => $full
+if ($isSearch) {
+    // Search the entire project tree from the root, regardless of which
+    // folder is currently open. Skip heavy/irrelevant directories.
+    $searchExcludeDirs = [
+        '.git', '.svn', '.hg', '.idea', '.vscode',
+        'node_modules', 'vendor',
+        'System Volume Information', '$RECYCLE.BIN',
     ];
+    $searchOutcome = searchTree($realBase, $q, $searchExcludeDirs);
+    $fileData = $searchOutcome['matches'];
+    $searchScanTruncated = $searchOutcome['truncated'];
+    $searchTotalMatches = count($fileData);
+    if ($searchTotalMatches > $searchLimit) {
+        $fileData = array_slice($fileData, 0, $searchLimit);
+    }
+} else {
+    $items = scandir($base);
+    if ($items === false) {
+        die('Error: Unable to read directory contents.');
+    }
+
+    $items = array_filter($items, function($item) use ($base) {
+        return $item !== '.' && $item !== '..';
+    });
+
+    // Build an array of file data
+    $fileData = [];
+    foreach ($items as $item) {
+        $full = $base . '/' . $item;
+        $stat = stat($full);
+        $fileData[] = [
+            'name' => $item,
+            'isDir' => is_dir($full),
+            'size' => $stat['size'],
+            'modified' => $stat['mtime'],
+            'fullPath' => $full,
+            'relPath' => ($dir === '.' ? '' : $dir . '/') . $item,
+        ];
+    }
 }
 
 // Sorting function
@@ -106,7 +191,7 @@ if (stripos($serverSoftware, 'Apache') !== false) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Localhost File Explorer</title>
+    <title><?php echo $isSearch ? 'Search: ' . htmlspecialchars($q) . ' - Localhost File Explorer' : 'Localhost File Explorer'; ?></title>
     <!-- Font Awesome 4.7.0 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <!-- Russo One font for animated heading -->
@@ -338,6 +423,69 @@ if (stripos($serverSoftware, 'Apache') !== false) {
         .sort-controls select {
             font-family: inherit;
             font-size: calc(0.9 * var(--base-font-size, 16px));
+        }
+        .search-form {
+            flex: 1;
+            min-width: 220px;
+        }
+        .search-box {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(255,255,255,0.1);
+            padding: 0.5rem 0.9rem;
+            border-radius: 2rem;
+        }
+        .search-box .fa-search {
+            color: #94a3b8;
+        }
+        .search-box input[type="text"] {
+            flex: 1;
+            min-width: 0;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: inherit;
+            font-family: inherit;
+            font-size: calc(0.9 * var(--base-font-size, 16px));
+        }
+        .search-box input[type="text"]::placeholder {
+            color: #94a3b8;
+        }
+        .search-clear {
+            color: #94a3b8;
+            display: flex;
+        }
+        .search-clear:hover {
+            color: white;
+            text-decoration: none;
+        }
+        body.light-mode .search-box {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        .search-summary {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        /* Search-in-progress status bar - sits between the toolbar and the
+           breadcrumb, matching the breadcrumb's rounding */
+        .search-status-bar {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            background: var(--accent);
+            color: white;
+            font-size: calc(0.8 * var(--base-font-size, 16px));
+            border-radius: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+        .search-status-bar.active {
+            display: flex;
         }
 
         /* Grid view styles */
@@ -768,27 +916,59 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                         <i class="fa fa-arrow-<?php echo $order == 'asc' ? 'up' : 'down'; ?>"></i>
                     </button>
                 </div>
+                <form class="search-form" method="GET" action="">
+                    <input type="hidden" name="dir" value="<?php echo htmlspecialchars($dir); ?>">
+                    <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
+                    <input type="hidden" name="sort" value="<?php echo htmlspecialchars($sort); ?>">
+                    <input type="hidden" name="order" value="<?php echo htmlspecialchars($order); ?>">
+                    <div class="search-box">
+                        <i class="fa fa-search"></i>
+                        <input type="text" name="q" id="search-input" placeholder="Search entire project&hellip;" value="<?php echo htmlspecialchars($q); ?>" autocomplete="off">
+                        <?php if ($isSearch): ?>
+                            <a href="?dir=<?php echo urlencode($dir) . $extraParams; ?>" class="search-clear" title="Clear search"><i class="fa fa-times"></i></a>
+                        <?php endif; ?>
+                    </div>
+                </form>
             </div>
 
-            <!-- Breadcrumb navigation with current path -->
+            <div id="search-status-bar" class="search-status-bar">
+                <i class="fa fa-circle-o-notch fa-spin"></i>
+                <span id="search-status-text">Searching entire project&hellip;</span>
+            </div>
+
+            <!-- Breadcrumb navigation with current path, or a search summary -->
             <div class="breadcrumb">
-                <div class="breadcrumb-nav">
-                    <?php
-                    $parts = explode('/', trim($dir, '/'));
-                    $pathSoFar = '';
-                    echo '<a href="?dir=.' . $extraParams . '">root</a>';
-                    foreach ($parts as $part) {
-                        if (empty($part)) continue;
-                        $pathSoFar .= ($pathSoFar ? '/' : '') . $part;
-                        echo ' / <a href="?dir=' . urlencode($pathSoFar) . $extraParams . '">' . htmlspecialchars($part) . '</a>';
-                    }
-                    ?>
-                </div>
-                <div class="path-row">
-                    <div class="current-path" id="currentPath"><?php echo htmlspecialchars($fullPath); ?></div>
-                    <button class="copy-btn" onclick="copyPath()"><i class="fa fa-clipboard"></i> Copy path</button>
-                    <span id="copyFeedback" class="copy-feedback">Copied!</span>
-                </div>
+                <?php if ($isSearch): ?>
+                    <div class="search-summary">
+                        <i class="fa fa-search"></i>
+                        <?php echo $searchTotalMatches; ?> result<?php echo $searchTotalMatches == 1 ? '' : 's'; ?> for &ldquo;<strong><?php echo htmlspecialchars($q); ?></strong>&rdquo;
+                        <?php if ($searchTotalMatches > count($fileData)): ?>
+                            (showing first <?php echo count($fileData); ?>)
+                        <?php endif; ?>
+                        &mdash; <a href="?dir=<?php echo urlencode($dir) . $extraParams; ?>">Clear search</a>
+                        <?php if ($searchScanTruncated): ?>
+                            <span style="color:#f59e0b;">&mdash; scan stopped early (too many files/folders to fully search) &mdash; results may be incomplete, try a more specific term</span>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="breadcrumb-nav">
+                        <?php
+                        $parts = explode('/', trim($dir, '/'));
+                        $pathSoFar = '';
+                        echo '<a href="?dir=.' . $extraParams . '">root</a>';
+                        foreach ($parts as $part) {
+                            if (empty($part)) continue;
+                            $pathSoFar .= ($pathSoFar ? '/' : '') . $part;
+                            echo ' / <a href="?dir=' . urlencode($pathSoFar) . $extraParams . '">' . htmlspecialchars($part) . '</a>';
+                        }
+                        ?>
+                    </div>
+                    <div class="path-row">
+                        <div class="current-path" id="currentPath"><?php echo htmlspecialchars($fullPath); ?></div>
+                        <button class="copy-btn" onclick="copyPath()"><i class="fa fa-clipboard"></i> Copy path</button>
+                        <span id="copyFeedback" class="copy-feedback">Copied!</span>
+                    </div>
+                <?php endif; ?>
             </div>
 
             <!-- File listing -->
@@ -799,8 +979,8 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                 echo '<ul class="file-list">';
             }
 
-            // Parent directory link
-            if ($dir !== '.'):
+            // Parent directory link (not shown while searching)
+            if (!$isSearch && $dir !== '.'):
                 $parentDir = dirname($dir);
                 $parentUrl = $parentDir === '.' ? '?dir=.' . $extraParams : '?dir=' . urlencode($parentDir) . $extraParams;
                 
@@ -828,16 +1008,28 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                 $isDir = $item['isDir'];
                 $name = $item['name'];
                 $fullPathItem = $item['fullPath'];
+                $relPath = $item['relPath'];
                 $icon = $isDir ? '<i class="fa fa-folder"></i>' : '<i class="fa fa-file-o"></i>';
 
                 if ($isDir) {
-                    $folderRelative = ($dir === '.' ? '' : $dir . '/') . $name;
-                    $projectUrl = $folderRelative . '/';
-                    $explorerUrl = '?dir=' . urlencode($folderRelative) . $extraParams;
+                    $projectUrl = $relPath . '/';
+                    $explorerUrl = '?dir=' . urlencode($relPath) . $extraParams;
                     $hasIndex = hasIndex($fullPathItem, $indexFiles);
                 } else {
-                    $fileUrl = ($dir === '.' ? '' : $dir . '/') . $name;
+                    $fileUrl = $relPath;
                 }
+
+                // Build meta line: location context while searching, plus file size
+                $metaParts = [];
+                if ($isSearch) {
+                    $parentRel = dirname($relPath);
+                    $locationLabel = ($parentRel === '.' || $parentRel === '') ? 'root' : $parentRel;
+                    $metaParts[] = 'in ' . htmlspecialchars($locationLabel);
+                }
+                if (!$isDir) {
+                    $metaParts[] = number_format($item['size']) . ' bytes';
+                }
+                $metaHtml = $metaParts ? '<div class="file-meta">' . implode(' &middot; ', $metaParts) . '</div>' : '';
 
                 if ($view == 'grid') {
                     echo '<div class="file-card">';
@@ -854,9 +1046,7 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                         echo '<a href="' . htmlspecialchars($fileUrl) . '" target="_blank">' . htmlspecialchars($name) . '</a>';
                     }
                     echo '</div>';
-                    if (!$isDir) {
-                        echo '<div class="file-meta">' . number_format($item['size']) . ' bytes</div>';
-                    }
+                    echo $metaHtml;
                     echo '</div>';
                 } else {
                     echo '<li>';
@@ -873,10 +1063,16 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                         echo '<a href="' . htmlspecialchars($fileUrl) . '" target="_blank">' . htmlspecialchars($name) . '</a>';
                     }
                     echo '</div>';
-                    if (!$isDir) {
-                        echo '<div class="file-meta">' . number_format($item['size']) . ' bytes</div>';
-                    }
+                    echo $metaHtml;
                     echo '</li>';
+                }
+            }
+
+            if ($isSearch && empty($fileData)) {
+                if ($view == 'grid') {
+                    echo '<p style="opacity:0.7; grid-column: 1 / -1;">No files or folders match &ldquo;' . htmlspecialchars($q) . '&rdquo;.</p>';
+                } else {
+                    echo '<li style="opacity:0.7; border-bottom:none;">No files or folders match &ldquo;' . htmlspecialchars($q) . '&rdquo;.</li>';
                 }
             }
 
@@ -1001,8 +1197,29 @@ if (stripos($serverSoftware, 'Apache') !== false) {
             // Update URL and reload
             const url = new URL(window.location.href);
             url.searchParams.set(param, value);
+            // Re-running a search (e.g. changing view/sort while search results
+            // are showing) re-triggers the same whole-project scan, so show
+            // the status bar for that navigation too.
+            if (url.searchParams.get('q')) {
+                showSearchStatus(url.searchParams.get('q'));
+            }
             window.location.href = url.toString();
         }
+
+        // Search-in-progress indicator
+        function showSearchStatus(term) {
+            const bar = document.getElementById('search-status-bar');
+            const text = document.getElementById('search-status-text');
+            text.textContent = 'Searching entire project for "' + term + '"…';
+            bar.classList.add('active');
+        }
+
+        document.querySelector('.search-form').addEventListener('submit', function() {
+            const term = document.getElementById('search-input').value.trim();
+            if (term) {
+                showSearchStatus(term);
+            }
+        });
 
         // Check localStorage for saved preferences on initial load
         (function() {

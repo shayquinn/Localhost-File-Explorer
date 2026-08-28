@@ -11,6 +11,7 @@ A clean, modern PHP-based file browser for navigating your local web server dire
 ## Features
 
 - 📁 **Directory Navigation** - Browse through your localhost directories with an intuitive interface
+- 🔎 **Whole-Project Search** - Search every file and folder from the root via the toolbar search box or a `?q=term` URL - no need to browse into the right folder first
 - 🔗 **Breadcrumb Navigation** - Easily track and navigate your current path
 - 📋 **Copy Path** - One-click copy of the full filesystem path to clipboard
 - 🔍 **Smart Folder Detection** - Automatically detects folders with index files (index.php, index.html, index.htm)
@@ -33,6 +34,16 @@ A clean, modern PHP-based file browser for navigating your local web server dire
 ### File Behavior
 - Files open directly in a new browser tab when clicked.
 - File sizes are displayed in bytes.
+
+### Search
+- Type a term into the search box in the toolbar (or open `?q=term` directly) to search **every file and folder under the project root**, regardless of which directory you're currently browsing.
+- Matching is a case-insensitive substring match against file/folder names.
+- Results show where each match lives (its containing folder) alongside the normal size/name info, and folders/files link straight to their location just like the regular listing.
+- Version-control and dependency folders (`.git`, `.svn`, `.hg`, `.idea`, `.vscode`, `node_modules`, `vendor`) and Windows system folders (`System Volume Information`, `$RECYCLE.BIN`) are skipped automatically. Symlinks/junctions are never followed, to avoid infinite loops.
+- Only the first 500 matches are displayed, and the scan itself stops after ~150,000 items or 45 seconds - whichever comes first - to keep very large trees from hanging the page. If the scan is cut off, a warning is shown and results may be incomplete; try a more specific term.
+- Click "Clear search" (or remove `q` from the URL) to return to normal folder browsing.
+
+> **Note:** Search always scans from the project root down, not just the currently open folder. On a very large project tree this can take several seconds - see [Performance](#performance) below.
 
 ### View Modes
 - **List View**: Traditional detailed view with file metadata
@@ -157,6 +168,14 @@ The explorer is self-contained with all CSS inline. If styles appear broken:
 2. Try clearing browser cache and reloading
 3. Check browser console for JavaScript errors
 
+### Search Is Slow, Times Out, or Says "Scan Stopped Early"
+
+Search walks the entire project tree from the root on every request, so response time scales with how many files/folders live under it:
+1. If `index.php` sits at the root of a large workspace (e.g. your whole `htdocs`, with many projects inside), search has to traverse all of it - this can take several seconds to tens of seconds on large trees or slow disks
+2. A "scan stopped early" warning means the safety cap (~150,000 items or 45 seconds) was hit before finishing; results may be incomplete - try a more specific search term, or increase `$maxNodes`/`$maxSeconds` in `searchTree()`
+3. If you're behind a reverse proxy (e.g. Nginx), a slow search can exceed the proxy's own timeout (`proxy_read_timeout`) and return a 504 before PHP even finishes - either raise that timeout or lower `$maxSeconds` so PHP gives up first
+4. Placing the explorer inside a smaller, more specific directory (rather than at the root of a huge workspace) keeps searches fast
+
 ## Security
 
 - **Path Sanitization**: The explorer prevents directory traversal attacks by validating that all accessed paths remain within the base directory
@@ -266,6 +285,7 @@ The explorer uses URL parameters to maintain state:
 - `view`: View mode (`list` or `grid`)
 - `sort`: Sort criteria (`name`, `size`, `modified`)
 - `order`: Sort order (`asc` or `desc`)
+- `q`: Search term - when present, replaces the normal directory listing with a recursive whole-project search (see [Search](#search))
 
 ### Data Storage
 - **Session Persistence**: Uses `localStorage` to remember user preferences
@@ -276,6 +296,7 @@ The explorer uses URL parameters to maintain state:
 - **Efficient Sorting**: Uses PHP's `usort()` with optimized comparison functions
 - **Minimal Overhead**: Single file with inline CSS and JavaScript
 - **Caching Friendly**: No external dependencies except Font Awesome CDN
+- **Bounded Search**: Recursive search walks the entire project tree, which is fast for typical projects but scales with total file count. It's capped at ~150,000 items or 45 seconds to avoid runaway scans (and gateway timeouts) on very large or deeply nested directories - tune `$maxNodes`/`$maxSeconds` in the `searchTree()` function if you need different limits
 
 ## License
 
