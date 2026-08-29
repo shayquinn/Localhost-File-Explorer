@@ -19,61 +19,232 @@ function hasIndex($dirPath, $indexFiles) {
     return false;
 }
 
-// Recursively search the whole project tree for files/folders whose name
-// contains $query (case-insensitive). Directories in $excludeDirs are
-// skipped entirely (not descended into) to keep things fast and clean.
-function searchTree($root, $query, $excludeDirs, $maxNodes = 150000, $maxSeconds = 45) {
+// Build the HTML for one file/folder row (list <li> or grid .file-card).
+// Shared by the normal directory listing and search results so both
+// render identically.
+function renderFileItem($item, $view, $indexFiles, $extraParams) {
+    $isDir = $item['isDir'];
+    $name = $item['name'];
+    $fullPathItem = $item['fullPath'];
+    $relPath = $item['relPath'];
+    $projectType = isset($item['projectType']) ? $item['projectType'] : null;
+    $icon = $isDir ? '<i class="fa fa-folder"></i>' : '<i class="fa fa-file-o"></i>';
+    if ($projectType === 'notebook') {
+        $icon = '<i class="fa fa-book"></i>';
+    }
+    $hasIndex = false;
+
+    if ($isDir) {
+        $projectUrl = $relPath . '/';
+        $explorerUrl = '?dir=' . urlencode($relPath) . $extraParams;
+        $hasIndex = hasIndex($fullPathItem, $indexFiles);
+    } else {
+        $fileUrl = $relPath;
+    }
+
+    $metaParts = [];
+    if ($projectType === 'notebook') {
+        $metaParts[] = 'Notebook';
+    } elseif ($projectType === 'project') {
+        $metaParts[] = 'Project';
+    }
+    if (!$isDir) {
+        $metaParts[] = number_format($item['size']) . ' bytes';
+    }
+    $metaHtml = $metaParts ? '<div class="file-meta">' . implode(' &middot; ', $metaParts) . '</div>' : '';
+
+    $wrapOpen = $view == 'grid' ? '<div class="file-card">' : '<li>';
+    $wrapClose = $view == 'grid' ? '</div>' : '</li>';
+
+    $html = $wrapOpen;
+    $html .= '<div class="file-icon">' . $icon . '</div>';
+    $html .= '<div class="file-name">';
+    if ($isDir) {
+        if ($hasIndex) {
+            $html .= '<a href="' . htmlspecialchars($projectUrl) . '">' . htmlspecialchars($name) . '</a>';
+            $browseTitle = $view == 'grid' ? 'Browse' : 'Browse directory contents';
+            $html .= '<a href="' . htmlspecialchars($explorerUrl) . '" class="extra-icon" title="' . $browseTitle . '"><i class="fa fa-search"></i></a>';
+        } else {
+            $html .= '<a href="' . htmlspecialchars($explorerUrl) . '">' . htmlspecialchars($name) . '</a>';
+        }
+    } else {
+        $html .= '<a href="' . htmlspecialchars($fileUrl) . '" target="_blank">' . htmlspecialchars($name) . '</a>';
+    }
+    $html .= '</div>';
+    $html .= $metaHtml;
+    $html .= $wrapClose;
+
+    return $html;
+}
+
+// Decide whether a top-level folder is worth surfacing as a search result,
+// and as what kind. Looks only at that folder's own immediate contents (one
+// level deep, not recursive) so it stays cheap:
+//   - a "notebook.nbk" file        -> 'notebook' (a KeepNote-style notebook)
+//   - an index file (.php/.html/.htm), any other .html/.htm file, a
+//     README, a .git folder or .gitignore file, an index.js, or any
+//     TypeScript file -> 'project'
+//   - none of the above            -> null (a plain organizational folder,
+//                                     not a project - excluded from search)
+function classifyFolder($dirPath, $indexFiles) {
+    $items = @scandir($dirPath);
+    if ($items === false) {
+        return null;
+    }
+
+    $lowerIndexFiles = array_map('strtolower', $indexFiles);
+    $isProject = false;
+
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+        $lower = strtolower($item);
+
+        if ($lower === 'notebook.nbk') {
+            return 'notebook';
+        }
+        if (in_array($lower, $lowerIndexFiles, true)) {
+            $isProject = true;
+        }
+        $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+        if ($ext === 'html' || $ext === 'htm' || $ext === 'php') {
+            $isProject = true;
+        }
+        if ($lower === 'index.js') {
+            $isProject = true;
+        }
+        if ($ext === 'ts' || $ext === 'tsx') {
+            $isProject = true;
+        }
+        if (strpos($lower, 'readme') === 0) {
+            $isProject = true;
+        }
+        if (strpos($lower, 'license') === 0) {
+            $isProject = true;
+        }
+        if ($lower === '.git' || $lower === '.gitignore') {
+            $isProject = true;
+        }
+        // Node.js
+        if (in_array($lower, ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'], true)) {
+            $isProject = true;
+        }
+        // PHP (Composer)
+        if ($lower === 'composer.json' || $lower === 'composer.lock') {
+            $isProject = true;
+        }
+        // Python
+        if (in_array($lower, ['requirements.txt', 'pyproject.toml', 'pipfile', 'manage.py'], true)) {
+            $isProject = true;
+        }
+        // Rust
+        if ($lower === 'cargo.toml') {
+            $isProject = true;
+        }
+        // Go
+        if ($lower === 'go.mod') {
+            $isProject = true;
+        }
+        // Ruby
+        if ($lower === 'gemfile') {
+            $isProject = true;
+        }
+        // Java
+        if ($lower === 'pom.xml' || $lower === 'build.gradle') {
+            $isProject = true;
+        }
+        // .NET
+        if ($ext === 'csproj' || $ext === 'sln') {
+            $isProject = true;
+        }
+        // Docker
+        if ($lower === 'dockerfile' || strpos($lower, 'docker-compose') === 0) {
+            $isProject = true;
+        }
+        // Generic build tooling
+        if ($lower === 'makefile') {
+            $isProject = true;
+        }
+    }
+
+    return $isProject ? 'project' : null;
+}
+
+// Search only matches top-level project/notebook folders (the immediate
+// children of the site root) - i.e. "jump to a project", not a deep file
+// search. This is a single, non-recursive directory scan (plus one more
+// shallow scan per name match, to classify it), so it's effectively
+// instant regardless of how large any individual project is. Folders in
+// $excludeDirs (version control, dependency, and OS system folders) don't
+// count as "projects" and are skipped. Files never match.
+function searchProjects($root, $query, $excludeDirs, $indexFiles, $maxNodes = 50000, $maxSeconds = 20) {
     $results = [];
     $visited = 0;
-    $truncated = false;
-
-    $filter = function ($current) use ($excludeDirs) {
-        // Never follow symlinks/junctions - on Windows a junction pointing
-        // back at an ancestor directory would otherwise recurse forever.
-        if ($current->isLink()) {
-            return false;
-        }
-        if ($current->isDir() && in_array($current->getFilename(), $excludeDirs, true)) {
-            return false;
-        }
-        return true;
-    };
-
-    $dirIterator = new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS);
-    $filterIterator = new RecursiveCallbackFilterIterator($dirIterator, $filter);
-    $iterator = new RecursiveIteratorIterator($filterIterator, RecursiveIteratorIterator::SELF_FIRST);
-
     $deadline = microtime(true) + $maxSeconds;
+    searchProjectsRecurse($root, $root, $query, $excludeDirs, $indexFiles, $results, $visited, $maxNodes, $deadline);
+    return $results;
+}
 
-    try {
-        foreach ($iterator as $fileInfo) {
-            $visited++;
-            if ($visited > $maxNodes || microtime(true) > $deadline) {
-                // Bail out rather than let a huge or slow (e.g. network-mounted)
-                // tree run until the web server's own gateway timeout kills it.
-                $truncated = true;
-                break;
-            }
-            if (stripos($fileInfo->getFilename(), $query) === false) {
-                continue;
-            }
-            $full = $fileInfo->getPathname();
+// Walks $dir looking for folders whose name matches $query. The key move:
+// once a folder itself classifies as a project or notebook, its contents
+// are never scanned - only plain organizational folders (folders that
+// aren't themselves a project) get recursed into. A project's internals
+// (node_modules, vendor, build output, deep source trees...) are usually
+// the vast majority of a tree's files, so pruning at every project
+// boundary keeps this fast on real-world, deeply-nested trees without
+// needing to limit the scan to one directory level.
+function searchProjectsRecurse($root, $dir, $query, $excludeDirs, $indexFiles, &$results, &$visited, $maxNodes, $deadline) {
+    $items = @scandir($dir);
+    if ($items === false) {
+        return;
+    }
+
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+
+        $visited++;
+        if ($visited > $maxNodes || microtime(true) > $deadline) {
+            // Defensive backstop only - pruning should keep real-world
+            // trees well under this in practice.
+            return;
+        }
+
+        $full = $dir . '/' . $item;
+        if (!is_dir($full) || is_link($full)) {
+            continue;
+        }
+        if (in_array($item, $excludeDirs, true)) {
+            continue;
+        }
+
+        // Classify for labeling (Project/Notebook badge) AND to decide
+        // whether to prune here.
+        $type = classifyFolder($full, $indexFiles);
+
+        if (stripos($item, $query) !== false) {
             $stat = @stat($full);
             $results[] = [
-                'name' => $fileInfo->getFilename(),
-                'isDir' => $fileInfo->isDir(),
-                'size' => $stat ? $stat['size'] : 0,
+                'name' => $item,
+                'isDir' => true,
+                'size' => 0,
                 'modified' => $stat ? $stat['mtime'] : 0,
                 'fullPath' => $full,
                 'relPath' => str_replace('\\', '/', substr($full, strlen($root) + 1)),
+                'projectType' => $type,
             ];
         }
-    } catch (UnexpectedValueException $e) {
-        // A subdirectory became unreadable (permissions, race condition) -
-        // return whatever was found rather than failing the whole search.
-    }
 
-    return ['matches' => $results, 'truncated' => $truncated];
+        if ($type === null) {
+            // Plain organizational folder - keep looking inside it for
+            // nested projects.
+            searchProjectsRecurse($root, $full, $query, $excludeDirs, $indexFiles, $results, $visited, $maxNodes, $deadline);
+        }
+        // Else: this folder IS a project/notebook - stop here. Its
+        // contents are never scanned.
+    }
 }
 
 // Get current directory from query string (sanitize)
@@ -86,9 +257,9 @@ $view = isset($_GET['view']) ? $_GET['view'] : 'list';   // 'list' or 'grid'
 $sort = isset($_GET['sort']) ? $_GET['sort'] : 'name';    // 'name', 'size', 'modified'
 $order = isset($_GET['order']) ? $_GET['order'] : 'asc';  // 'asc' or 'desc'
 
-// Search term - when present, search the whole project tree instead of
-// listing just the current directory. Works from a fresh page load too,
-// e.g. index.php?q=invoice
+// Search term - when present, search for top-level project folders instead
+// of listing the current directory. Works from a fresh page load too, e.g.
+// index.php?q=invoice
 $q = isset($_GET['q']) ? trim($_GET['q']) : '';
 $isSearch = $q !== '';
 
@@ -101,25 +272,16 @@ if (strpos($base, $realBase) !== 0) {
     die('Access denied.');
 }
 
-$searchLimit = 500;
-$searchTotalMatches = 0;
-$searchScanTruncated = false;
+// Version-control/dependency folders and Windows system folders that don't
+// count as "projects" and are skipped by search.
+$searchExcludeDirs = [
+    '.git', '.svn', '.hg', '.idea', '.vscode',
+    'node_modules', 'vendor',
+    'System Volume Information', '$RECYCLE.BIN',
+];
 
 if ($isSearch) {
-    // Search the entire project tree from the root, regardless of which
-    // folder is currently open. Skip heavy/irrelevant directories.
-    $searchExcludeDirs = [
-        '.git', '.svn', '.hg', '.idea', '.vscode',
-        'node_modules', 'vendor',
-        'System Volume Information', '$RECYCLE.BIN',
-    ];
-    $searchOutcome = searchTree($realBase, $q, $searchExcludeDirs);
-    $fileData = $searchOutcome['matches'];
-    $searchScanTruncated = $searchOutcome['truncated'];
-    $searchTotalMatches = count($fileData);
-    if ($searchTotalMatches > $searchLimit) {
-        $fileData = array_slice($fileData, 0, $searchLimit);
-    }
+    $fileData = searchProjects($realBase, $q, $searchExcludeDirs, $indexFiles);
 } else {
     $items = scandir($base);
     if ($items === false) {
@@ -423,6 +585,15 @@ if (stripos($serverSoftware, 'Apache') !== false) {
         .sort-controls select {
             font-family: inherit;
             font-size: calc(0.9 * var(--base-font-size, 16px));
+        }
+        .sort-controls select:disabled,
+        .order-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .order-btn:disabled:hover,
+        .sort-controls select:disabled:hover {
+            background: rgba(255,255,255,0.1);
         }
         .search-form {
             flex: 1;
@@ -923,7 +1094,7 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                     <input type="hidden" name="order" value="<?php echo htmlspecialchars($order); ?>">
                     <div class="search-box">
                         <i class="fa fa-search"></i>
-                        <input type="text" name="q" id="search-input" placeholder="Search entire project&hellip;" value="<?php echo htmlspecialchars($q); ?>" autocomplete="off">
+                        <input type="text" name="q" id="search-input" placeholder="Search projects&hellip;" value="<?php echo htmlspecialchars($q); ?>" autocomplete="off">
                         <?php if ($isSearch): ?>
                             <a href="?dir=<?php echo urlencode($dir) . $extraParams; ?>" class="search-clear" title="Clear search"><i class="fa fa-times"></i></a>
                         <?php endif; ?>
@@ -933,7 +1104,7 @@ if (stripos($serverSoftware, 'Apache') !== false) {
 
             <div id="search-status-bar" class="search-status-bar">
                 <i class="fa fa-circle-o-notch fa-spin"></i>
-                <span id="search-status-text">Searching entire project&hellip;</span>
+                <span id="search-status-text">Searching&hellip;</span>
             </div>
 
             <!-- Breadcrumb navigation with current path, or a search summary -->
@@ -941,14 +1112,8 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                 <?php if ($isSearch): ?>
                     <div class="search-summary">
                         <i class="fa fa-search"></i>
-                        <?php echo $searchTotalMatches; ?> result<?php echo $searchTotalMatches == 1 ? '' : 's'; ?> for &ldquo;<strong><?php echo htmlspecialchars($q); ?></strong>&rdquo;
-                        <?php if ($searchTotalMatches > count($fileData)): ?>
-                            (showing first <?php echo count($fileData); ?>)
-                        <?php endif; ?>
+                        <?php echo count($fileData); ?> match<?php echo count($fileData) == 1 ? '' : 'es'; ?> for &ldquo;<strong><?php echo htmlspecialchars($q); ?></strong>&rdquo;
                         &mdash; <a href="?dir=<?php echo urlencode($dir) . $extraParams; ?>">Clear search</a>
-                        <?php if ($searchScanTruncated): ?>
-                            <span style="color:#f59e0b;">&mdash; scan stopped early (too many files/folders to fully search) &mdash; results may be incomplete, try a more specific term</span>
-                        <?php endif; ?>
                     </div>
                 <?php else: ?>
                     <div class="breadcrumb-nav">
@@ -1003,77 +1168,17 @@ if (stripos($serverSoftware, 'Apache') !== false) {
                 }
             endif;
 
-            // File items
-            foreach ($fileData as $item) {
-                $isDir = $item['isDir'];
-                $name = $item['name'];
-                $fullPathItem = $item['fullPath'];
-                $relPath = $item['relPath'];
-                $icon = $isDir ? '<i class="fa fa-folder"></i>' : '<i class="fa fa-file-o"></i>';
-
-                if ($isDir) {
-                    $projectUrl = $relPath . '/';
-                    $explorerUrl = '?dir=' . urlencode($relPath) . $extraParams;
-                    $hasIndex = hasIndex($fullPathItem, $indexFiles);
-                } else {
-                    $fileUrl = $relPath;
-                }
-
-                // Build meta line: location context while searching, plus file size
-                $metaParts = [];
-                if ($isSearch) {
-                    $parentRel = dirname($relPath);
-                    $locationLabel = ($parentRel === '.' || $parentRel === '') ? 'root' : $parentRel;
-                    $metaParts[] = 'in ' . htmlspecialchars($locationLabel);
-                }
-                if (!$isDir) {
-                    $metaParts[] = number_format($item['size']) . ' bytes';
-                }
-                $metaHtml = $metaParts ? '<div class="file-meta">' . implode(' &middot; ', $metaParts) . '</div>' : '';
-
+            if ($isSearch && empty($fileData)) {
                 if ($view == 'grid') {
-                    echo '<div class="file-card">';
-                    echo '<div class="file-icon">' . $icon . '</div>';
-                    echo '<div class="file-name">';
-                    if ($isDir) {
-                        if ($hasIndex) {
-                            echo '<a href="' . htmlspecialchars($projectUrl) . '">' . htmlspecialchars($name) . '</a>';
-                            echo '<a href="' . htmlspecialchars($explorerUrl) . '" class="extra-icon" title="Browse"><i class="fa fa-search"></i></a>';
-                        } else {
-                            echo '<a href="' . htmlspecialchars($explorerUrl) . '">' . htmlspecialchars($name) . '</a>';
-                        }
-                    } else {
-                        echo '<a href="' . htmlspecialchars($fileUrl) . '" target="_blank">' . htmlspecialchars($name) . '</a>';
-                    }
-                    echo '</div>';
-                    echo $metaHtml;
-                    echo '</div>';
+                    echo '<p style="opacity:0.7; grid-column: 1 / -1;">No matches for &ldquo;' . htmlspecialchars($q) . '&rdquo;.</p>';
                 } else {
-                    echo '<li>';
-                    echo '<div class="file-icon">' . $icon . '</div>';
-                    echo '<div class="file-name">';
-                    if ($isDir) {
-                        if ($hasIndex) {
-                            echo '<a href="' . htmlspecialchars($projectUrl) . '">' . htmlspecialchars($name) . '</a>';
-                            echo '<a href="' . htmlspecialchars($explorerUrl) . '" class="extra-icon" title="Browse directory contents"><i class="fa fa-search"></i></a>';
-                        } else {
-                            echo '<a href="' . htmlspecialchars($explorerUrl) . '">' . htmlspecialchars($name) . '</a>';
-                        }
-                    } else {
-                        echo '<a href="' . htmlspecialchars($fileUrl) . '" target="_blank">' . htmlspecialchars($name) . '</a>';
-                    }
-                    echo '</div>';
-                    echo $metaHtml;
-                    echo '</li>';
+                    echo '<li style="opacity:0.7; border-bottom:none;">No matches for &ldquo;' . htmlspecialchars($q) . '&rdquo;.</li>';
                 }
             }
 
-            if ($isSearch && empty($fileData)) {
-                if ($view == 'grid') {
-                    echo '<p style="opacity:0.7; grid-column: 1 / -1;">No files or folders match &ldquo;' . htmlspecialchars($q) . '&rdquo;.</p>';
-                } else {
-                    echo '<li style="opacity:0.7; border-bottom:none;">No files or folders match &ldquo;' . htmlspecialchars($q) . '&rdquo;.</li>';
-                }
+            // File items
+            foreach ($fileData as $item) {
+                echo renderFileItem($item, $view, $indexFiles, $extraParams);
             }
 
             if ($view == 'grid') {
@@ -1198,8 +1303,8 @@ if (stripos($serverSoftware, 'Apache') !== false) {
             const url = new URL(window.location.href);
             url.searchParams.set(param, value);
             // Re-running a search (e.g. changing view/sort while search results
-            // are showing) re-triggers the same whole-project scan, so show
-            // the status bar for that navigation too.
+            // are showing) re-triggers the project scan, so show the status
+            // bar for that navigation too.
             if (url.searchParams.get('q')) {
                 showSearchStatus(url.searchParams.get('q'));
             }
@@ -1210,7 +1315,7 @@ if (stripos($serverSoftware, 'Apache') !== false) {
         function showSearchStatus(term) {
             const bar = document.getElementById('search-status-bar');
             const text = document.getElementById('search-status-text');
-            text.textContent = 'Searching entire project for "' + term + '"…';
+            text.textContent = 'Searching projects for "' + term + '"…';
             bar.classList.add('active');
         }
 

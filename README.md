@@ -5,132 +5,123 @@ A clean, modern PHP-based file browser for navigating your local web server dire
 ![PHP](https://img.shields.io/badge/PHP-777BB4?style=flat&logo=php&logoColor=white)
 ![Font Awesome](https://img.shields.io/badge/Font_Awesome-339AF0?style=flat&logo=fontawesome&logoColor=white)
 
-
 ![Localhost File Explorer Demo](Screenshot.png)
+
+## Quick Start
+
+1. Copy the `index.php` file into any directory on your web server
+2. Open it in your browser: `http://localhost/path/to/explorer/`
+3. That's it - no configuration needed
+
+Works with MAMP, WAMP, XAMPP, Laragon, USBWebserver, standalone Apache/Nginx/IIS, or PHP's built-in server (`php -S localhost:8000`). Requires PHP 5.6+.
 
 ## Features
 
-- 📁 **Directory Navigation** - Browse through your localhost directories with an intuitive interface
-- 🔎 **Whole-Project Search** - Search every file and folder from the root via the toolbar search box or a `?q=term` URL - no need to browse into the right folder first
-- 🔗 **Breadcrumb Navigation** - Easily track and navigate your current path
-- 📋 **Copy Path** - One-click copy of the full filesystem path to clipboard
-- 🔍 **Smart Folder Detection** - Automatically detects folders with index files (index.php, index.html, index.htm)
-- ⏰ **Live Date/Time Display** - Real-time clock in the header
-- 📂 **Advanced Sorting** - Sort by name, size, or modification date in ascending/descending order
-- 👁️ **Dual View Modes** - Toggle between list view (detailed) and grid view (icon-based)
-- 🎨 **Modern UI with Themes** - Clean, responsive design with dark/light theme modes
-- 🌈 **Customizable Appearance** - Settings modal with hue rotation, font size controls, and background patterns
-- 🎭 **Background Patterns** - Choose from 5 geometric patterns with 3D effects (cubes, triangles, squares, columns, rectangles)
-- 🔧 **Server Auto-Detection** - Automatically detects your server type (Apache, Nginx, IIS, etc.)
-- 🚀 **Self-Contained** - All styles included in the file - no external CSS dependencies
-- 💾 **Persistent Preferences** - Remembers your view, sort, theme, and appearance settings across sessions
+- 📁 **Directory Navigation** - browse your localhost folders with an intuitive interface
+- 🔎 **Project Search** - jump straight to a project by name, no matter how deep it's nested. Search from the toolbar box, or set it up as a browser address-bar search engine and jump to a project by typing a keyword + your term, without opening this page first
+- 🔍 **Smart Folder Detection** - folders with an index file open directly when clicked
+- 📂 **Sorting & Dual Views** - sort by name, size, or modified date; toggle list or grid view
+- 🔗 **Breadcrumbs & Copy Path** - track your current location and copy its full filesystem path
+- 🎨 **Themes & Appearance** - dark/light mode, hue rotation, font size, and background patterns, all persisted across sessions
+- 🔧 **Server Auto-Detection** - shows which web server (Apache, Nginx, IIS, etc.) is serving the page
+- ⏰ **Live Clock** and 🚀 **Single-File Deployment** - everything lives in one `index.php` file
 
-## How It Works
+## Basic Usage
 
-### Folder Behavior
+- **Browse**: click a folder name to open it directly (if it has an index file) or step into it; use the breadcrumbs or `..` to go back
+- **Search**: type into the toolbar search box to find a project folder anywhere in the tree by name - or set it up as a browser search engine to jump to a project straight from the address bar (see [Search](#search) in Documentation)
+- **Switch view**: the list/grid buttons in the toolbar
+- **Sort**: the dropdown and order-toggle button in the toolbar
+- **Customize appearance**: the ⚙️ gear icon opens theme, color, font, and background pattern settings
+
+For exactly how folder detection, search matching, and settings work - see [Documentation](#documentation) below.
+
+---
+
+## Documentation
+
+In-depth reference: how folder/search detection actually works, troubleshooting, security notes, and how to customize the code.
+
+### How It Works
+
+#### Folder Behavior
 - **Folders with an index file**: Clicking the folder name opens the project directly. A search icon (🔍) allows you to browse the directory contents instead.
 - **Folders without an index file**: Clicking navigates into the directory using the file explorer.
 
-### File Behavior
+> This "has an index file" check (`hasIndex()`, using the `$indexFiles` list) is separate from - and narrower than - the Project/Notebook detection Search uses (`classifyFolder()`, below). A folder can be labeled **Project** in search results without having a direct-open link here, e.g. one that only has a `README` or `package.json`.
+
+#### File Behavior
 - Files open directly in a new browser tab when clicked.
 - File sizes are displayed in bytes.
 
-### Search
-- Type a term into the search box in the toolbar (or open `?q=term` directly) to search **every file and folder under the project root**, regardless of which directory you're currently browsing.
-- Matching is a case-insensitive substring match against file/folder names.
-- Results show where each match lives (its containing folder) alongside the normal size/name info, and folders/files link straight to their location just like the regular listing.
-- Version-control and dependency folders (`.git`, `.svn`, `.hg`, `.idea`, `.vscode`, `node_modules`, `vendor`) and Windows system folders (`System Volume Information`, `$RECYCLE.BIN`) are skipped automatically. Symlinks/junctions are never followed, to avoid infinite loops.
-- Only the first 500 matches are displayed, and the scan itself stops after ~150,000 items or 45 seconds - whichever comes first - to keep very large trees from hanging the page. If the scan is cut off, a warning is shown and results may be incomplete; try a more specific term.
-- Click "Clear search" (or remove `q` from the URL) to return to normal folder browsing.
-
-> **Note:** Search always scans from the project root down, not just the currently open folder. On a very large project tree this can take several seconds - see [Performance](#performance) below.
-
-### View Modes
+#### View Modes
 - **List View**: Traditional detailed view with file metadata
 - **Grid View**: Icon-based view perfect for visual browsing
 
-### Sorting Options
+#### Sorting Options
 - **Name**: Alphabetical sorting (A-Z or Z-A)
 - **Size**: Sort by file size (smallest to largest or vice versa)
 - **Modified**: Sort by last modification date (oldest to newest or newest to oldest)
 
-## Installation
+### Search
 
-1. Copy the `index.php` file to any directory on your web server
-2. Access via your browser: `http://localhost/path/to/explorer/`
-3. That's it! No configuration needed.
+- Type a term into the search box in the toolbar (or open `?q=term` directly) to find a folder by name anywhere in the project tree - i.e. "jump to a project," however deep it's nested.
+- Matching is a case-insensitive substring match against folder names. It doesn't match individual files.
+- **Search recurses, but prunes at every project boundary.** Each folder is classified as it's encountered (see below); the moment a folder itself qualifies as a project or notebook, its contents are never scanned - only plain organizational folders get recursed into further. Since a project's internals (`node_modules`, vendor libraries, build output, deep source trees) are usually the vast majority of a real tree's files, this keeps search fast without needing to cap it at one directory level.
+- Every matching folder is returned, **except** version-control/dependency folders (`.git`, `.svn`, `.hg`, `.idea`, `.vscode`, `node_modules`, `vendor`) and Windows system folders (`System Volume Information`, `$RECYCLE.BIN`), which never count as a match even if their name fits and are never recursed into. Symlinks/junctions are skipped too.
+- Matching folders are labeled based on their own immediate contents, judged by what's inside them:
+  - Contains `notebook.nbk` → labeled **Notebook** (shown with a book icon)
+  - Contains any of the following → labeled **Project**:
+    - Web: any `.php`, `.html`, or `.htm` file, `index.js`, or any TypeScript file (`.ts`/`.tsx`)
+    - General: a `README`, a `LICENSE`, a `.git` folder or `.gitignore`, or a `Makefile`
+    - Node.js: `package.json`, `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml`
+    - PHP (Composer): `composer.json` or `composer.lock`
+    - Python: `requirements.txt`, `pyproject.toml`, `Pipfile`, or `manage.py`
+    - Rust: `Cargo.toml` &nbsp; • &nbsp; Go: `go.mod` &nbsp; • &nbsp; Ruby: `Gemfile`
+    - Java: `pom.xml` or `build.gradle` &nbsp; • &nbsp; .NET: `.csproj`/`.sln`
+    - Docker: `Dockerfile` or a `docker-compose*.yml`
+  - Otherwise (a plain organizational folder, e.g. one that just contains other folders) → shown with no label, but still included in results
+- As a defensive backstop against pathological trees (e.g. thousands of nested plain folders with no project markers anywhere), the scan stops after ~50,000 folders visited or 20 seconds - tune `$maxNodes`/`$maxSeconds` in `searchProjects()` if you ever need different limits. In practice, pruning keeps real-world trees well under this.
+- Click "Clear search" (or remove `q` from the URL) to return to normal folder browsing.
 
-### Supported Server Software
-- **MAMP** (macOS/Windows)
-- **WAMP** (Windows)
-- **XAMPP** (Cross-platform)
-- **USBWebserver** (Portable)
-- **Laragon** (Windows)
-- **Apache** (standalone)
-- **Nginx** (standalone)
-- **IIS** (Windows)
-- **PHP Built-in Server** (`php -S localhost:8000`)
+**Tip - search straight from your browser's address bar:** because search works off a plain `?q=` URL, you can add it as a custom search engine in your browser and jump to a project without opening this page first:
+1. In your browser's search engine settings (e.g. Chrome/Edge: `chrome://settings/searchEngines`, under "Site Search"), add a new entry
+2. Set its URL to `http://localhost:8890/?q=%s` (swap in whatever host/port this is actually running on) - `%s` is where your browser substitutes the search term
+3. Give it a keyword (e.g. `project`), then in the address bar type that keyword, <kbd>Tab</kbd>, your search term, and Enter
 
-## Requirements
+This requires the PHP server this app is running on to actually be running - if it's not, the request will fail to connect rather than search anything.
+
+### Toolbar
+
+The toolbar at the top of the explorer provides quick access to view and sort controls:
+
+- **View Toggle**: List View (📋) shows files in a detailed list with metadata; Grid View (🗂️) shows them as large icons in a grid layout
+- **Sort Controls**: a dropdown to pick the sort criteria (Name, Size, Modified) and a button to toggle ascending (↑) / descending (↓)
+
+Your preferences are automatically saved using localStorage and persist across browser sessions.
+
+### Settings Modal
+
+Click the gear icon (⚙️) in the top-right corner to open the settings modal:
+
+- **Theme Mode**: Dark Mode (default, dark backgrounds/light text) or Light Mode (white backgrounds/dark text)
+- **Hue Rotation**: adjusts the overall color hue of the interface (0°-360°) while maintaining readability
+- **Font Size**: controls the base font size (12px-24px) across file names, breadcrumbs, and metadata in both view modes
+- **Background Patterns**: 5 geometric patterns with 3D effects - Overlapping Cubes, Triangles, Squares, Cube Columns, Rectangles - each with a subtle gradient overlay for readability and smooth transitions between them. "None" shows a clean gradient background instead.
+- **Reset to Defaults**: restores all settings and clears their localStorage entries
+
+All settings are automatically saved to localStorage and persist across browser sessions.
+
+### Requirements
 
 - PHP 5.6 or higher
 - Web server with PHP support
 - Modern web browser with JavaScript enabled
+- Internet access, for the browser to load two CDN-hosted stylesheets: [Font Awesome 4.7.0](https://cdnjs.cloudflare.com/) (all icons) and [Google Fonts](https://fonts.googleapis.com/) (Russo One, Inter, Roboto, Fira Code, Open Sans). Without it, the page still loads and works - icons just won't render, and text falls back to your OS's default fonts
 
-## Using the Toolbar
+### Troubleshooting
 
-The toolbar at the top of the explorer provides quick access to view and sort controls:
-
-### View Toggle
-- **List View** (📋): Shows files in a detailed list with metadata
-- **Grid View** (🗂️): Shows files as large icons in a grid layout
-
-### Sort Controls
-- **Sort By**: Dropdown to select sorting criteria (Name, Size, Modified)
-- **Order**: Button to toggle between ascending (↑) and descending (↓) order
-
-Your preferences are automatically saved using localStorage and persist across browser sessions.
-
-## Settings Modal
-
-Click the gear icon (⚙️) in the top-right corner to open the settings modal, which provides extensive customization options:
-
-### Theme Mode
-- **Dark Mode**: Default theme with dark backgrounds and light text
-- **Light Mode**: Light theme with white backgrounds and dark text
-
-### Hue Rotation
-- Adjust the overall color hue of the interface (0° to 360°)
-- Creates unique color variations while maintaining readability
-
-### Font Size
-- Control the base font size (12px to 24px)
-- Affects all text elements including file names, breadcrumbs, and metadata
-- Both list view and grid view adapt to font size changes
-
-### Background Patterns
-Choose from 5 geometric patterns with 3D effects:
-- **Overlapping Cubes**: Interlocking cube pattern with depth
-- **Triangles (3D Effect)**: Triangular pattern with 3D perspective
-- **Squares (3D Effect)**: Square-based pattern with depth illusion
-- **Cube Columns**: Vertical columns of cubes
-- **Rectangles (3D Effect)**: Rectangular pattern with 3D appearance
-
-**Pattern Features:**
-- Patterns automatically adapt to dark/light theme modes
-- Subtle gradient overlay reduces visual intensity for better readability
-- Smooth transitions when switching patterns
-- "None" option shows a clean gradient background
-
-### Reset to Defaults
-- One-click button to restore all settings to their original values
-- Clears all localStorage preferences
-
-All settings are automatically saved to localStorage and persist across browser sessions.
-
-## Troubleshooting
-
-### "Failed opening required..." Error
+#### "Failed opening required..." Error
 
 If you see an error like:
 ```
@@ -145,54 +136,55 @@ This is **NOT** caused by this file explorer. This error indicates your PHP conf
 3. For USBWebserver, check the `settings` folder for PHP configuration
 4. Either remove the directive or ensure the referenced file exists
 
-### "Access denied" Message
+#### "Access denied" Message
 
 This appears when attempting to navigate outside the explorer's root directory. This is a security feature.
 
-### Blank Page / No Output
+#### Blank Page / No Output
 
 1. Check PHP error logs
 2. Ensure PHP is properly configured
 3. Verify file permissions (readable by web server)
 
-### Styles Not Loading
+#### Styles Not Loading
 
-The explorer is self-contained with all CSS inline. If styles appear broken:
+Most of the explorer's CSS is inline in the page, but icons and custom fonts are loaded from Font Awesome and Google Fonts CDNs (see [Requirements](#requirements)) - if those specifically look broken (missing icons, fallback fonts), it's usually a connectivity issue reaching those CDNs, not the app itself. If the whole layout looks broken:
 1. Ensure JavaScript is enabled (for some dynamic features)
 2. Check browser console for errors
 3. Try a hard refresh (Ctrl+Shift+R)
 
-### View/Sort Settings Not Persisting
+#### View/Sort Settings Not Persisting
 
 1. Ensure cookies/localStorage are enabled in your browser
 2. Try clearing browser cache and reloading
 3. Check browser console for JavaScript errors
 
-### Search Is Slow, Times Out, or Says "Scan Stopped Early"
-
-Search walks the entire project tree from the root on every request, so response time scales with how many files/folders live under it:
-1. If `index.php` sits at the root of a large workspace (e.g. your whole `htdocs`, with many projects inside), search has to traverse all of it - this can take several seconds to tens of seconds on large trees or slow disks
-2. A "scan stopped early" warning means the safety cap (~150,000 items or 45 seconds) was hit before finishing; results may be incomplete - try a more specific search term, or increase `$maxNodes`/`$maxSeconds` in `searchTree()`
-3. If you're behind a reverse proxy (e.g. Nginx), a slow search can exceed the proxy's own timeout (`proxy_read_timeout`) and return a 504 before PHP even finishes - either raise that timeout or lower `$maxSeconds` so PHP gives up first
-4. Placing the explorer inside a smaller, more specific directory (rather than at the root of a huge workspace) keeps searches fast
-
-## Security
+### Security
 
 - **Path Sanitization**: The explorer prevents directory traversal attacks by validating that all accessed paths remain within the base directory
 - **Access Control**: Attempting to access paths outside the root directory will result in an "Access denied" message
 - **No Write Access**: This tool only reads and displays files - it cannot modify, delete, or create files
 - **Client-Side Storage**: Preferences are stored locally in your browser using localStorage (no server-side storage)
 
-## Customization
+### Customization
 
-### Adding Index File Types
+#### Adding Index File Types
 To recognize additional index files, modify the `$indexFiles` array at the top of the file:
 
 ```php
 $indexFiles = ['index.php', 'index.html', 'index.htm', 'default.aspx', 'index.jsx'];
 ```
 
-### Changing Colors
+#### Changing What Counts as a Project in Search
+Search's project/notebook detection lives in the `classifyFolder()` function, which already recognizes common markers across several ecosystems (see [Search](#search) for the full list). To recognize another one (e.g. a `Vagrantfile` or a project-specific config file), add a check inside its loop:
+
+```php
+if ($lower === 'vagrantfile') {
+    $isProject = true;
+}
+```
+
+#### Changing Colors
 Modify the CSS variables in the `:root` selector:
 
 ```css
@@ -203,7 +195,7 @@ Modify the CSS variables in the `:root` selector:
 }
 ```
 
-### Adding New Sort Options
+#### Adding New Sort Options
 To add additional sorting criteria, modify the sorting function in the PHP code:
 
 ```php
@@ -213,7 +205,7 @@ case 'type':
     break;
 ```
 
-### Customizing Theme Colors
+#### Customizing Theme Colors
 To modify the theme colors for dark and light modes, update the CSS variables in the JavaScript settings:
 
 ```javascript
@@ -226,7 +218,7 @@ document.documentElement.style.setProperty('--bg-dark', '#f1f5f9');
 document.documentElement.style.setProperty('--bg-card', '#ffffff');
 ```
 
-### Adding New Background Patterns
+#### Adding New Background Patterns
 To add a new background pattern, you need to:
 1. Add a new CSS class for the pattern
 2. Add the pattern to the pattern select dropdown in HTML
@@ -243,7 +235,7 @@ body.pattern-your-pattern::before {
 }
 ```
 
-### Modifying Pattern Colors
+#### Modifying Pattern Colors
 Pattern colors are controlled by CSS custom properties (--c1, --c2, --c3). To change pattern colors for different themes:
 
 ```css
@@ -262,7 +254,7 @@ body.light-mode.pattern-overlapping-cubes::before {
 }
 ```
 
-### Adjusting Gradient Overlay
+#### Adjusting Gradient Overlay
 The gradient overlay that makes patterns less distinct can be modified:
 
 ```css
@@ -276,27 +268,26 @@ body.light-mode::after {
 }
 ```
 
+### Technical Details
 
-## Technical Details
-
-### URL Parameters
+#### URL Parameters
 The explorer uses URL parameters to maintain state:
 - `dir`: Current directory path
 - `view`: View mode (`list` or `grid`)
 - `sort`: Sort criteria (`name`, `size`, `modified`)
 - `order`: Sort order (`asc` or `desc`)
-- `q`: Search term - when present, replaces the normal directory listing with a recursive whole-project search (see [Search](#search))
+- `q`: Search term - when present, replaces the normal directory listing with matching project/notebook folders found anywhere in the tree (see [Search](#search))
 
-### Data Storage
+#### Data Storage
 - **Session Persistence**: Uses `localStorage` to remember user preferences
 - **Automatic Redirect**: If no URL parameters are present, loads preferences from localStorage
 - **Parameter Preservation**: All navigation links preserve current view/sort settings
 
-### Performance
+#### Performance
 - **Efficient Sorting**: Uses PHP's `usort()` with optimized comparison functions
 - **Minimal Overhead**: Single file with inline CSS and JavaScript
-- **Caching Friendly**: No external dependencies except Font Awesome CDN
-- **Bounded Search**: Recursive search walks the entire project tree, which is fast for typical projects but scales with total file count. It's capped at ~150,000 items or 45 seconds to avoid runaway scans (and gateway timeouts) on very large or deeply nested directories - tune `$maxNodes`/`$maxSeconds` in the `searchTree()` function if you need different limits
+- **Caching Friendly**: The two CDN dependencies (Font Awesome, Google Fonts - see [Requirements](#requirements)) are the only externally-loaded assets and are cached long-term by the browser after the first visit
+- **Pruned Search**: Search recurses through the whole tree, but stops descending the instant a folder classifies as a project or notebook - so a project's internals never get scanned, keeping it fast regardless of tree size
 
 ## License
 
