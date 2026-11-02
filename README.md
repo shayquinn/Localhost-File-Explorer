@@ -11,9 +11,9 @@ A clean, modern PHP-based file browser for navigating your local web server dire
 
 1. Copy index.php to your web server’s document root. Common locations:
 
-    Linux: /var/www/html
-    Windows (XAMPP): C:\xampp\htdocs
-    Windows (standalone Apache): C:\Apache24\htdocs
+    - Linux: /var/www/html
+    - Windows (XAMPP): C:\xampp\htdocs
+    - Windows (standalone Apache): C:\Apache24\htdocs
 
 2. Open http://localhost/ in your browser.
 3. You’re ready to go—no configuration required.
