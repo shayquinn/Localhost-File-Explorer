@@ -9,9 +9,14 @@ A clean, modern PHP-based file browser for navigating your local web server dire
 
 ## Quick Start
 
-1. Copy the `index.php` file into top directory web server i.e. Linux: Usually /var/www/htmlWindows (XAMPP): Usually C:\xampp\htdocs Windows (Standalone): Usually C:\Apache24\htdocs 
-2. Open it in your browser: `http://localhost/`
-3. That's it - no configuration needed
+1. Copy index.php to your web server’s document root. Common locations:
+
+    Linux: /var/www/html
+    Windows (XAMPP): C:\xampp\htdocs
+    Windows (standalone Apache): C:\Apache24\htdocs
+
+2. Open http://localhost/ in your browser.
+3. You’re ready to go—no configuration required.
 
 Works with MAMP, WAMP, XAMPP, Laragon, USBWebserver, standalone Apache/Nginx/IIS, or PHP's built-in server (`php -S localhost:8000`). Requires PHP 5.6+.
 
